@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "templates": {
+    "访客模式": {
+      "tools": ["bash", "pwsh", "subagent", "workflow"],
+      "guest": true
+    },
+    "只读模式": {
+      "tools": ["bash", "pwsh", "write", "edit", "subagent", "workflow"],
+      "guest": false
+    },
+    "极简": {
+      "tools": ["bash", "pwsh", "glob", "grep", "subagent", "workflow", "todo_write"],
+      "guest": false
+    }
+  }
+}

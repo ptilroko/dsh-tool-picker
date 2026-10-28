@@ -1,0 +1,58 @@
+{
+  "name": "dsh-tool-picker",
+  "version": "1.0.0",
+  "description": "Per-session tool control for DeepSeek Harness: toggle which tools a conversation can call, plus a workspace-only Guest mode.",
+  "type": "module",
+  "license": "MIT",
+  "author": "ptilroko",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "tools",
+    "restrict",
+    "sandbox",
+    "guest-mode"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ptilroko/dsh-tool-picker.git"
+  },
+  "homepage": "https://github.com/ptilroko/dsh-tool-picker#readme",
+  "bugs": {
+    "url": "https://github.com/ptilroko/dsh-tool-picker/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "presets.json",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "scripts": {
+    "smoke": "node smoke.mjs",
+    "check": "node --check client.js && node -e \"import('./index.js')\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

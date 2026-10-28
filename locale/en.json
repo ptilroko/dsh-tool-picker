@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tool Picker",
+    "description": "Choose which tools a single session may call, from the composer tool row."
+  }
+}
