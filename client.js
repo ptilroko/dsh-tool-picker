@@ -1,11 +1,11 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-tool-picker',
+  id: 'dsh-tool-picker',
   factory: (require) => {
     const React = require('react');
     const h = React.createElement;
 
     const NS = 'dsh-tool-picker';
-    const PACKAGE = '@local/dsh-tool-picker';
+    const PACKAGE = 'dsh-tool-picker';
 
     /** Zod is only used for the descriptor's introspection schema; the call path never parses. */
     let zod;
@@ -21,26 +21,26 @@ window.__ModuleLoader__.load({
 
     const stringCodec = {
       mode: 'strict',
-      typeSymbol: '@local/dsh-tool-picker#string',
+      typeSymbol: 'dsh-tool-picker#string',
       create: stringSchema,
       jsonSchema: { type: 'string' },
     };
     const booleanCodec = {
       mode: 'strict',
-      typeSymbol: '@local/dsh-tool-picker#boolean',
+      typeSymbol: 'dsh-tool-picker#boolean',
       create: booleanSchema,
       jsonSchema: { type: 'boolean' },
     };
     const stateResult = {
       mode: 'src-json',
-      typeSymbol: '@local/dsh-tool-picker#ToolBoard',
+      typeSymbol: 'dsh-tool-picker#ToolBoard',
       create: anySchema,
       description: 'the current switch board of one session',
       jsonSchema: { type: 'object' },
     };
     const templatesResult = {
       mode: 'src-json',
-      typeSymbol: '@local/dsh-tool-picker#Templates',
+      typeSymbol: 'dsh-tool-picker#Templates',
       create: anySchema,
       description: 'the saved templates and, for imports, how many were merged',
       jsonSchema: { type: 'object' },

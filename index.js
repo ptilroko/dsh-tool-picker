@@ -556,7 +556,7 @@ export function apply(ctx) {
 
   ctx.inject(['commands'], (commandCtx) => {
     commandCtx.commands.register({
-      definitionId: '@local/dsh-tool-picker',
+      definitionId: 'dsh-tool-picker',
       name: 'tools',
       description: '列出、关闭或打开本会话可调用的工具（只影响当前会话）',
       input: { hint: '[on|off|guest|default|reset] [tool]' },

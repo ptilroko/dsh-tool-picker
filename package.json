@@ -1,6 +1,6 @@
 {
   "name": "dsh-tool-picker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Per-session tool control for DeepSeek Harness: toggle which tools a conversation can call, plus a workspace-only Guest mode.",
   "type": "module",
   "license": "MIT",
