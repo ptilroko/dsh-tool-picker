@@ -77,6 +77,13 @@ console.log('guard glob escape   ', probe('glob', { pattern: '../**/*.js' }));
 console.log('guard grep path     ', probe('grep', { pattern: 'secret', path: 'E:\\Users' }));
 console.log('guard bash (restrict covers it)', probe('bash', { command: 'type C:\\Windows\\win.ini' }));
 
+// --- coverage: no field-name whitelist any more ---------------------------------
+console.log('guard unknown field ', probe('notebook_edit', { notebook_path: 'C:\\Windows\\a.json' }));
+console.log('guard nested object ', probe('multi_edit', { edits: [{ file_path: '../escape.txt', old_string: '' }] }));
+console.log('guard array of paths', probe('read', { paths: ['notes.txt', 'D:\\secret.txt'] }));
+console.log('guard prose allowed ', probe('write', { file_path: 'notes.md', content: 'see C:\\Windows\\win.ini and ../escape.txt' }));
+console.log('guard url allowed   ', probe('fetch', { url: 'https://example.com/a/b' }));
+
 console.log('CMD list', JSON.stringify(command.handler({ agent, rawInput: '' })));
 console.log('CMD off', JSON.stringify(command.handler({ agent, rawInput: 'off read' })));
 console.log('CMD guest off', JSON.stringify(command.handler({ agent, rawInput: 'guest off' })));
@@ -138,3 +145,53 @@ console.log('SESSIONS ROWS', JSON.stringify(feed.sessions));
 const closed = await picker.setGuest('session-3', true);
 console.log('CLOSED SESSION GUEST', JSON.stringify(closed));
 console.log('SESSIONS AFTER', JSON.stringify((await picker.sessions()).sessions.map((row) => [row.id, row.title, row.guest, row.live])));
+
+// --- the log outranks the profile file ------------------------------------------
+// A conversation reopened on a machine without a record: the request header it logged
+// says only `read` survived, so the picker rebuilds the rest as switched off.
+const resumed = {
+  id: 'session-77',
+  session: {
+    header: { cwd: 'E:\\Documents\\deepseek-harness\\default-workspace' },
+    requestHeader: () => ({ tools: [{ name: 'read' }] }),
+  },
+  ctx: agent.ctx,
+};
+all.set(resumed.id, resumed);
+created({ agent: resumed, source: 'resume' });
+console.log('RESTORED FROM LOG', JSON.stringify(picker.state('session-77')));
+
+// A fresh conversation with no recorded request falls back to the defaults.
+const brandNew = { id: 'session-78', session: { header: { cwd: 'E:\\Documents\\deepseek-harness\\default-workspace' }, requestHeader: () => undefined }, ctx: agent.ctx };
+all.set(brandNew.id, brandNew);
+created({ agent: brandNew, source: 'startup' });
+console.log('BRAND NEW', JSON.stringify(picker.state('session-78')));
+
+// --- a layer that refuses to apply is reported, not swallowed --------------------
+const brokenRegistered = [];
+const brokenAgent = {
+  id: 'session-2',
+  session: { header: { cwd: 'E:\\Documents\\deepseek-harness\\default-workspace' } },
+  ctx: {
+    tools: {
+      restrict() {
+        throw new Error('tools.restrict() requires a scoped context');
+      },
+      guard() {
+        return () => {};
+      },
+    },
+  },
+};
+const brokenCtx = {
+  provide: (name, value) => brokenRegistered.push([name, value]),
+  on: () => () => {},
+  agents: { get: () => brokenAgent, list: () => [brokenAgent] },
+  tools: ctx.tools,
+  inject: () => {},
+  get: () => undefined,
+};
+apply(brokenCtx);
+const [, brokenPicker] = brokenRegistered.find(([name]) => name === 'toolPicker');
+brokenPicker.setEnabled('session-2', 'bash', false);
+console.log('DEGRADED', JSON.stringify(brokenPicker.state('session-2').degraded));

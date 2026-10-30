@@ -129,15 +129,35 @@ plugin_manager action=install_bundle target=<本地绝对路径 或 本仓库 np
 - 无会话记录时读到的是「全开、访客关」，**不会**继承 `defaults`（`defaults` 只在会话启动时拷一份，避免老会话被全局开关牵连）
 - 写盘失败只记 warn，不阻塞会话
 
+### 真相源：会话日志优先
+
+这份 JSON 是**缓存**，不是权威。重开一个会话时插件先读它自己的日志：
+
+- `session.requestHeader()` 折出最近一次请求里模型实际看到的工具名；
+- 与当前可限制集合相减，得到「被关掉的那些」；
+- 有 `request/header` 的会话（老对话、fork、从别的机器拷来的转录）按日志恢复，包括「一条都没关」；
+- 完全没有 `request/header` 的会话才算新会话，此时才拷 `defaults`。
+
+`request/header` 与配套的 `developer/message`（里面记着 `tool-removal` / `tool-addition` 块）都是宿主自己写的，所以「模型看不到哪个工具」这件事天然可从日志重建——换机器、回滚 profile、删掉 `state.json` 都不会把工具偷偷放回来。访客模式本身是插件偏好（日志里没有），恢复时按「shell 与子代理全关、文件工具还在」这个特征反推。
+
 ## 实现说明
 
 | 层 | 关键点 |
 |---|---|
 | Host | `agent.ctx.tools.restrict({ deny })` 掩码该 agent 的工具；`agent.ctx.tools.guard(fn)` 做路径守卫。两者都是 context-owned effect，dispose 即撤销 |
-| 会话生命周期 | 监听 `agent/created`（`source === 'startup'` 时把 defaults 拷进新会话）与 `agent/disposed`（清 disposer） |
+| 会话生命周期 | 监听 `agent/created`（先按日志恢复，再退回 defaults）与 `agent/disposed`（清 disposer、计数） |
 | RPC | 手写 `typertRemote` 绑定 + 原型上的 `remote-methods` 标记，走网关的 source descriptors 回退，无需代码生成 |
 | 客户端 | `ctx.remote.$mount(contribution)` 挂自定义命名空间；槽位 `conversation.input.left`（面板）与 `settings.section`（设置页） |
 | 持久化 | 直接读写 profile 下的 JSON（`node:fs`），不用 storage 服务 |
+
+### 路径守卫怎么判
+
+不维护字段名白名单：守卫递归走一遍这次调用的全部参数，跳过 `content`/`text`/`prompt`/`old_string` 这类**正文**字段，把其余「看起来像路径」的字符串（绝对路径、含分隔符、`.`/`..`）逐个验证——词法上必须在工作区内，真实位置（跟随 junction / symlink）也必须在工作区内。所以别的插件带来的 `notebook_path`、`target_file` 一样拦得住，而在工作区里写一份**提到** `C:\Windows\win.ini` 的文档不会被误伤。
+
+### 失败与计数
+
+- `tools.restrict()` / `tools.guard()` 抛错不再只写 console：错误记进该会话的 `degraded`，面板顶部显示「部分设置没生效：…」，`/tools` 输出里也会带一句。
+- 每次被守卫拒绝都会累加 `blocked`，面板与 `/tools` 显示「已拦截 N 次越界访问」，附带最后一次的拒绝原因——否则用户没法确认访客模式真的在干活。
 
 ## 已知限制
 
@@ -145,12 +165,13 @@ plugin_manager action=install_bundle target=<本地绝对路径 或 本仓库 np
 - `run_code` 不能点名限制（PTC 模式的传输层工具，点名会抛错）
 - 会话自己注册的工具不受控（它们不在可限制集合里）
 - 子代理不继承父会话的守卫，所以访客模式直接禁掉 `subagent` / `workflow`
+- 访客模式只是**工具层**约束：工作区外读取被拦，但沙箱模式本身仍按 DSH 设置走（想更彻底可以同时把会话沙箱切到 `workspace-write` / `read-only`）
 - 客户端的 bundle 在**宿主启动时**快照：改了 `client.js` 必须重启宿主，刷新页面无效
 
 ## 开发
 
 ```bash
-node smoke.mjs        # 假 ctx 跑一遍 state/setEnabled/setGuest/templates/命令
+node smoke.mjs        # 假 ctx 跑一遍 state/setEnabled/setGuest/templates/命令/守卫/日志恢复
 node --check client.js
 ```
 

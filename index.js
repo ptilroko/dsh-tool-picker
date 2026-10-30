@@ -34,11 +34,30 @@ const RESERVED = new Set(['run_code']);
  */
 const GUEST_BLOCKED = ['bash', 'pwsh', 'shell', 'terminal', 'exec', 'subagent', 'workflow'];
 
-/** Tools whose arguments name a path guest mode must check. */
-const GUEST_PATH_TOOLS = new Set(['read', 'read_image', 'write', 'edit', 'glob', 'grep']);
-
-/** Argument fields that carry a path (or a list of paths). */
-const PATH_FIELDS = ['file_path', 'path', 'paths', 'dir', 'directory', 'cwd', 'source', 'target', 'from', 'to'];
+/**
+ * Argument fields that hold prose, not a location. They are skipped so that a document
+ * *mentioning* `C:\Windows\win.ini` can still be written inside the workspace.
+ */
+const CONTENT_FIELDS = new Set([
+  'content',
+  'text',
+  'prompt',
+  'message',
+  'body',
+  'old_string',
+  'new_string',
+  'old_source',
+  'new_source',
+  'replacement',
+  'patch',
+  'diff',
+  'description',
+  'instructions',
+  'query',
+  'command',
+  'script',
+  'code',
+]);
 
 function profileDirectory() {
   if (process.env.DSH_PROFILE_DIR) return process.env.DSH_PROFILE_DIR;
@@ -191,33 +210,78 @@ function realPathOf(target) {
   return resolve(target);
 }
 
+/** Cheap shape test: does this string look like a filesystem location at all? */
+function looksLikePath(value) {
+  if (value.length === 0 || value.length > 400) return false;
+  if (/[\r\n]/.test(value)) return false;
+  if (isAbsolute(value)) return true;
+  if (/[\\/]/.test(value)) return true;
+  return value === '.' || value === '..';
+}
+
 /**
- * A path guard for guest mode: deny any filesystem call whose argument resolves outside
- * the session workspace. Relative paths resolve the same way the tools resolve them, and
- * every argument is checked twice — lexically, and again on its real location, so a
- * junction or symlink planted inside the workspace cannot forward the call outward.
+ * Reject one candidate path when it leaves the workspace, lexically or through a link.
+ * Returns a message suitable for the model, or undefined when the path is fine.
  */
-function guestGuard(root) {
-  const realRoot = realPathOf(root);
-  return (exec) => {
-    if (!GUEST_PATH_TOOLS.has(exec.name)) return undefined;
-    const args = exec.arguments ?? {};
-    for (const field of PATH_FIELDS) {
-      const value = args[field];
-      const candidates = typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
-      for (const raw of candidates) {
-        if (raw.length === 0) continue;
-        const target = resolve(root, raw);
-        const escapes = !inside(root, target) || !inside(realRoot, realPathOf(target));
-        if (escapes) {
-          return `访客模式：${exec.name} 不能访问工作区之外的路径 "${raw}"（工作区：${root}）`;
-        }
+function escapeReason(name, raw, root, realRoot) {
+  const target = isAbsolute(raw) ? resolve(raw) : resolve(root, raw);
+  if (inside(root, target) && inside(realRoot, realPathOf(target))) return undefined;
+  return `访客模式：${name} 不能访问工作区之外的路径 "${raw}"（工作区：${root}）`;
+}
+
+/**
+ * Walk every argument of one call and collect the first path that escapes. No field name
+ * list is trusted here: any string that *looks* like a path is checked, so a filesystem
+ * tool from another plugin (`notebook_path`, `target_file`, …) cannot slip through, while
+ * prose fields (a document that mentions `C:\…`) stay untouched.
+ */
+function firstEscape(exec, root, realRoot) {
+  const walk = (value, key, depth) => {
+    if (depth > 6 || value === null || value === undefined) return undefined;
+    if (typeof value === 'string') {
+      if (key !== undefined && CONTENT_FIELDS.has(key)) return undefined;
+      if (!looksLikePath(value)) return undefined;
+      return escapeReason(exec.name, value, root, realRoot);
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const reason = walk(item, key, depth + 1);
+        if (reason !== undefined) return reason;
+      }
+      return undefined;
+    }
+    if (typeof value === 'object') {
+      for (const [field, item] of Object.entries(value)) {
+        if (CONTENT_FIELDS.has(field)) continue;
+        const reason = walk(item, field, depth + 1);
+        if (reason !== undefined) return reason;
       }
     }
-    if (exec.name === 'glob' && typeof args.pattern === 'string' && (isAbsolute(args.pattern) || /(^|[\\/])\.\.([\\/]|$)/.test(args.pattern))) {
-      return `访客模式：glob 的模式 "${args.pattern}" 可能越出工作区（工作区：${root}）`;
-    }
     return undefined;
+  };
+  return walk(exec.arguments ?? {}, undefined, 0);
+}
+
+/**
+ * A path guard for guest mode: deny any call whose argument resolves outside the session
+ * workspace. Relative paths resolve the same way the tools resolve them, and every
+ * argument is checked twice — lexically, and again on its real location, so a junction or
+ * symlink planted inside the workspace cannot forward the call outward.
+ *
+ * `onBlock` receives the refusal so the picker can show that guest mode did something.
+ */
+function guestGuard(root, onBlock) {
+  const realRoot = realPathOf(root);
+  return (exec) => {
+    const reason = firstEscape(exec, root, realRoot);
+    if (reason !== undefined && typeof onBlock === 'function') {
+      try {
+        onBlock(reason);
+      } catch {
+        /* reporting must never break the refusal itself */
+      }
+    }
+    return reason;
   };
 }
 
@@ -227,6 +291,32 @@ export function apply(ctx) {
   const store = new SelectionStore();
   /** session id -> disposers of that agent's own restriction and guard layers */
   const layers = new Map();
+  /** session id -> what could not be applied, so the UI can stop claiming it worked */
+  const degraded = new Map();
+  /** session id -> { count, last } of guest-mode refusals */
+  const refusals = new Map();
+
+  function noteRefusal(sessionId, reason) {
+    const current = refusals.get(sessionId) ?? { count: 0, last: '' };
+    refusals.set(sessionId, { count: current.count + 1, last: reason });
+  }
+
+  /**
+   * The tool names the model last actually saw in this session, read from the folded
+   * request header the harness writes into the log. That makes the log — not this plugin's
+   * JSON — the authority on which tools are switched off: a transcript copied to another
+   * machine still carries the removals.
+   */
+  function loggedToolNames(agent) {
+    try {
+      const header = agent?.session?.requestHeader?.();
+      const tools = header?.tools;
+      if (!Array.isArray(tools)) return undefined;
+      return new Set(tools.map((tool) => tool?.name).filter((name) => typeof name === 'string' && name.length > 0));
+    } catch {
+      return undefined;
+    }
+  }
 
   function live(sessionId) {
     if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('sessionId must be a non-empty string');
@@ -247,12 +337,16 @@ export function apply(ctx) {
       .filter((name) => !RESERVED.has(name))
       .sort()
       .map((name) => ({ name, enabled: view.visible.has(name) && !off.has(name) }));
+    const refusal = refusals.get(sessionId);
     return {
       sessionId,
       live: true,
       guest: record.guest,
       tools,
       enabledCount: tools.filter((tool) => tool.enabled).length,
+      blocked: refusal?.count ?? 0,
+      lastBlocked: refusal?.last ?? '',
+      degraded: [...(degraded.get(sessionId) ?? [])],
     };
   }
 
@@ -271,7 +365,9 @@ export function apply(ctx) {
 
   function materialise(agent) {
     dispose(agent.id);
+    degraded.delete(agent.id);
 
+    const problems = [];
     const view = ctx.tools.view(agent);
     const record = store.recordOf(agent.id);
     const deny = new Set(record.disabled.filter((name) => !RESERVED.has(name) && view.restrictableNames.has(name)));
@@ -287,23 +383,28 @@ export function apply(ctx) {
         disposers.push(agent.ctx.tools.restrict({ deny: [...deny] }));
       } catch (error) {
         console.warn(`[dsh-tool-picker] cannot restrict session ${agent.id}: ${String(error)}`);
+        problems.push(`工具受限未生效：${error instanceof Error ? error.message : String(error)}`);
       }
     }
     if (record.guest) {
       try {
-        disposers.push(agent.ctx.tools.guard(guestGuard(workspaceOf(agent))));
+        disposers.push(agent.ctx.tools.guard(guestGuard(workspaceOf(agent), (reason) => noteRefusal(agent.id, reason))));
       } catch (error) {
         console.warn(`[dsh-tool-picker] cannot guard session ${agent.id}: ${String(error)}`);
+        problems.push(`路径守卫未生效：${error instanceof Error ? error.message : String(error)}`);
       }
     }
     if (disposers.length > 0) layers.set(agent.id, disposers);
+    if (problems.length > 0) degraded.set(agent.id, problems);
   }
 
   class ToolPicker {
     /** Read the switch board for one session. */
     state(sessionId) {
       const agent = live(sessionId);
-      if (agent === undefined) return { sessionId, live: false, guest: false, tools: [], enabledCount: 0 };
+      if (agent === undefined) {
+        return { sessionId, live: false, guest: false, tools: [], enabledCount: 0, blocked: 0, lastBlocked: '', degraded: [] };
+      }
       return board(sessionId, agent);
     }
 
@@ -574,7 +675,10 @@ export function apply(ctx) {
           const off = result.tools.filter((tool) => !tool.enabled).map((tool) => tool.name);
           const head = `本会话工具 ${result.enabledCount}/${result.tools.length} 已启用`;
           const guest = result.guest ? '（访客模式：仅工作区）' : '';
-          return off.length === 0 ? `${head}${guest}，没有关闭的工具` : `${head}${guest}；已关闭：${off.join(', ')}`;
+          const blocked = result.blocked > 0 ? `；已拦截 ${result.blocked} 次越界访问` : '';
+          const broken = result.degraded.length > 0 ? `；注意：${result.degraded.join('；')}` : '';
+          const body = off.length === 0 ? `${head}${guest}，没有关闭的工具` : `${head}${guest}；已关闭：${off.join(', ')}`;
+          return `${body}${blocked}${broken}`;
         };
 
         try {
@@ -636,11 +740,38 @@ export function apply(ctx) {
     });
   });
 
+  /**
+   * Rebuild one session's switches from its own log. The harness writes a `request/header`
+   * event whenever the request envelope changes and a `developer/message` recording the
+   * tool additions/removals that produced it, so "the tools that were missing" is durable
+   * and travels with the transcript.
+   */
+  function restoreFromLog(agent) {
+    const seen = loggedToolNames(agent);
+    // No `request/header` in the log at all: this conversation has never asked the model
+    // anything, so it is new and the defaults apply. Every other case is restored from what
+    // the log says the model saw — including "nothing was restricted".
+    if (seen === undefined) return false;
+    const view = ctx.tools.view(agent);
+    const missing = [...view.restrictableNames].filter((name) => !RESERVED.has(name) && !seen.has(name));
+    // Guest mode itself is a plugin preference, not a log record; infer it when every shell
+    // and sub-agent tool is gone while the file tools stayed, which is its exact footprint.
+    const shellish = GUEST_BLOCKED.filter((name) => view.restrictableNames.has(name));
+    const guest = shellish.length > 0 && shellish.every((name) => missing.includes(name));
+    store.setRecord(agent.id, { disabled: missing, guest });
+    return true;
+  }
+
   ctx.on('agent/created', ({ agent, source }) => {
-    // A conversation that starts now COPIES the defaults as its own record, once.
-    // Nothing is inherited on read, so changing the default later cannot touch it.
-    if (source === 'startup' && !store.hasRecord(agent.id)) {
-      store.setRecord(agent.id, { disabled: store.defaults.disabled, guest: store.defaults.guest });
+    if (!store.hasRecord(agent.id)) {
+      // The log outranks both the profile file and the defaults: a conversation that is
+      // reopened (or forked, or copied from another machine) is restored from what it
+      // itself recorded. Only a conversation with no recorded request at all is new.
+      if (!restoreFromLog(agent) && source === 'startup') {
+        // A conversation that starts now COPIES the defaults as its own record, once.
+        // Nothing is inherited on read, so changing the default later cannot touch it.
+        store.setRecord(agent.id, { disabled: store.defaults.disabled, guest: store.defaults.guest });
+      }
     }
     materialise(agent);
   });

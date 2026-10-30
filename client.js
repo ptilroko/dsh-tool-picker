@@ -73,6 +73,8 @@ window.__ModuleLoader__.load({
       imported: '已导入',
       guest: '访客模式',
       guestHint: '文件操作仅限本工作区；shell、子代理自动关闭',
+  blocked: '已拦截 {n} 次越界访问',
+  degraded: '部分设置没生效',
       defaultGuest: '新对话默认开启',
       defaultGuestHint: '新建会话自动带访客模式；现有会话不受影响',
       switchOn: '已开启',
@@ -113,6 +115,8 @@ window.__ModuleLoader__.load({
       imported: 'Imported',
       guest: 'Guest mode',
       guestHint: 'File access stays inside this workspace; shell and sub-agents are off',
+  blocked: 'Blocked {n} out-of-workspace attempt(s)',
+  degraded: 'Some switches did not apply',
       defaultGuest: 'New chats default on',
       defaultGuestHint: 'Fresh sessions start in guest mode; existing ones keep their own state',
       switchOn: 'On',
@@ -296,6 +300,9 @@ window.__ModuleLoader__.load({
       },
       guestText: { display: 'flex', flexDirection: 'column', gap: '1px', flex: 1, minWidth: 0 },
       guestSub: { fontSize: '11px', lineHeight: '15px', color: 'var(--dsw-alias-label-tertiary, #888)' },
+      status: { display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' },
+      statusNote: { fontSize: '11px', lineHeight: '15px', color: 'var(--dsw-alias-label-tertiary, #888)' },
+      statusBad: { fontSize: '11px', lineHeight: '15px', color: 'var(--dsw-alias-label-error, #d9534f)' },
       settingsRow: {
         display: 'flex',
         alignItems: 'center',
@@ -750,6 +757,14 @@ window.__ModuleLoader__.load({
             )
           : [h('div', { key: 'none', style: styles.empty }, templates === undefined ? t('loading') : t('emptyTemplates'))];
 
+        const statusNotes = [];
+        if ((board?.blocked ?? 0) > 0) {
+          statusNotes.push(h('div', { key: 'blocked', style: styles.statusNote }, t('blocked').replace('{n}', String(board.blocked))));
+        }
+        for (const [index, note] of (board?.degraded ?? []).entries()) {
+          statusNotes.push(h('div', { key: `degraded-${index}`, style: styles.statusBad }, `${t('degraded')}: ${note}`));
+        }
+
         const toolsBody = [
           h(
             'button',
@@ -769,6 +784,7 @@ window.__ModuleLoader__.load({
               h('span', { style: styles.guestSub }, t('guestHint')),
             ),
           ),
+          statusNotes.length === 0 ? null : h('div', { key: 'status', style: styles.status }, statusNotes),
           h('input', {
             key: 'search',
             type: 'search',
