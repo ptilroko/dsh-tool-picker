@@ -6,6 +6,8 @@ window.__ModuleLoader__.load({
 
     const NS = 'dsh-tool-picker';
     const PACKAGE = 'dsh-tool-picker';
+    /** Shown in the panel footer: the only way to tell a stale bundle from a stale host. */
+    const VERSION = '1.1.5';
 
     /** Zod is only used for the descriptor's introspection schema; the call path never parses. */
     let zod;
@@ -74,6 +76,7 @@ window.__ModuleLoader__.load({
       guest: '访客模式',
       guestHint: '文件操作仅限本工作区；shell、子代理自动关闭',
   blocked: '已拦截 {n} 次越界访问',
+  blockedNone: '暂时没有越界访问',
   degraded: '部分设置没生效',
       defaultGuest: '新对话默认开启',
       defaultGuestHint: '新建会话自动带访客模式；现有会话不受影响',
@@ -87,6 +90,73 @@ window.__ModuleLoader__.load({
       liveBadge: '当前打开',
       unnamedSession: '未命名会话',
       emptySessions: '还没有任何会话',
+      tool_read: '读取文本文件，返回带行号的内容',
+      tool_read_image: '读取本地图片并显示',
+      tool_write: '写入或整份覆盖一个文本文件',
+      tool_edit: '按原文精确替换来修改文件片段',
+      tool_glob: '按路径模式查找文件',
+      tool_grep: '按正则表达式搜索文件内容',
+      tool_pwsh: '在本会话的工作区执行 PowerShell 命令',
+      tool_todo_write: '维护任务清单并展示进度',
+      tool_web_search: '联网搜索并返回来源链接',
+      tool_web_fetch: '抓取指定网址的正文',
+      tool_advanced_search: '带时间范围的联网搜索',
+      tool_multi_search: '多引擎并发搜索后去重合并',
+      tool_platform_search: '只在某个平台内搜索（GitHub、B站等）',
+      tool_domain_search: '查询垂直数据源：包版本、论文、CVE 等',
+      tool_research: '一次完成搜索加抓取，返回多源简报',
+      tool_weather: '查询城市天气与多日预报',
+      tool_generate_image: '按描述生成一张新图片',
+      tool_generate_images: '按多条描述批量生成图片',
+      tool_edit_image: '基于已有图片进行修改',
+      tool_present: '把文件作为交付物呈现给用户',
+      tool_skill: '加载技能的完整操作说明',
+      tool_subagent: '派生一个不带当前上下文的子智能体',
+      tool_subagent_fork: '派生一个继承当前上下文的子智能体',
+      tool_list_agents: '列出子智能体及其状态',
+      tool_send_message: '给子智能体或父智能体发消息',
+      tool_interrupt_agent: '请求子智能体停止当前工作',
+      tool_workflow: '用脚本编排大量子智能体的多阶段任务',
+      tool_job_output: '读取后台任务的输出',
+      tool_job_list: '列出后台任务',
+      tool_job_kill: '取消后台任务',
+      tool_ask_user_question: '向用户提问，带可点选的建议选项',
+      tool_compress: '把已消耗的对话区间折叠成摘要',
+      tool_decompress: '还原被折叠的原始内容',
+      tool_search_context: '在压缩摘要里按关键词检索',
+      tool_acp_status: '查看上下文占用与可压缩范围',
+      tool_acp_cache: '查看提示缓存命中与折叠成本',
+      tool_create_goal: '创建一个跨轮持续的目标',
+      tool_get_goal: '读取当前目标',
+      tool_update_goal: '更新目标状态',
+      tool_exit_plan_mode: '提交计划等待用户批准',
+      tool_working_directory: '读取或切换工作目录',
+      tool_plugin_manager: '管理插件与插件包',
+      tool_plugin_market: '浏览插件市场索引',
+      tool_cordis_inspect_list: '列出可用的运行时检查提供方',
+      tool_cordis_inspect_query: '只读查询宿主或客户端运行时信息',
+      tool_view_canvas: '查看画布当前的选区',
+      tool_canvas_state: '查看画布内容与选中项',
+      tool_find_inspiration: '检索内置的绘图提示词库',
+      tool_video_search: '搜索网络上的视频',
+      tool_cache_search: '在已抓取页面的缓存里检索',
+      tool_free_search_test: '检测各搜索引擎是否可用',
+      tool_load_workspace_dependencies: '获取内置 Python 与 Node 依赖路径',
+      tool_gh_repo: '读取 GitHub 仓库信息',
+      tool_gh_file: '读取仓库里的单个文件',
+      tool_gh_issue: '读取 issue 与评论',
+      tool_gh_checks: '读取 PR 的 CI 检查结果',
+      tool_gh_review: '读取 PR 详情与代码差异',
+      tool_gh_search: '搜索 issue 与 PR',
+      tool_gh_repo_search: '搜索 GitHub 仓库',
+      tool_issue_open: '新建 issue',
+      tool_issue_comment: '评论 issue 或 PR',
+      tool_issue_close: '关闭 issue',
+      tool_pr_create: '创建 Pull Request',
+      tool_pr_update: '修改 PR 标题、正文、状态或目标分支',
+      tool_pr_merge: '合并 Pull Request',
+      tool_review_post: '发布代码评审评论',
+      tool_acp_read_original_image: '读取图片的原始分辨率版本',
     };
     const en = {
       trigger: 'Tools',
@@ -116,6 +186,7 @@ window.__ModuleLoader__.load({
       guest: 'Guest mode',
       guestHint: 'File access stays inside this workspace; shell and sub-agents are off',
   blocked: 'Blocked {n} out-of-workspace attempt(s)',
+  blockedNone: 'No out-of-workspace attempts yet',
   degraded: 'Some switches did not apply',
       defaultGuest: 'New chats default on',
       defaultGuestHint: 'Fresh sessions start in guest mode; existing ones keep their own state',
@@ -281,10 +352,11 @@ window.__ModuleLoader__.load({
       },
       templateName: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       count: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #888)' },
+      version: { fontSize: '10px', opacity: 0.55, color: 'var(--dsw-alias-label-tertiary, #888)' },
       guestRow: {
         display: 'flex',
         alignItems: 'center',
-        gap: '8px',
+        gap: '10px',
         width: '100%',
         boxSizing: 'border-box',
         marginTop: '8px',
@@ -316,18 +388,37 @@ window.__ModuleLoader__.load({
       settingsText: { display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 },
       settingsTitle: { fontSize: '14px', lineHeight: '20px', color: 'var(--dsw-alias-label-primary, inherit)' },
       settingsDesc: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary, #888)' },
-      switchButton: {
-        flex: 'none',
-        minWidth: '64px',
-        height: '28px',
-        padding: '0 10px',
-        borderRadius: 'var(--dsw-radius-sm, 6px)',
-        border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
-        background: 'transparent',
-        color: 'inherit',
-        font: 'inherit',
-        fontSize: '12px',
+      // Geometry and tokens copied from the harness's own Switch
+      // (ui-primitives/lib/Switch.module.css): 36x20 capsule, 2px padding, 16px thumb.
+      switchTrack: {
+        boxSizing: 'border-box',
+        position: 'relative',
+        flex: '0 0 auto',
+        width: '36px',
+        height: '20px',
+        padding: '2px',
+        border: 0,
+        borderRadius: '999px',
+        // corner-shape.css smooths every rounded corner with superellipse(1.5) through the
+        // universal selector; the harness switch opts back out, which is what makes it read
+        // as a true capsule instead of a rounded rectangle.
+        'corner-shape': 'round',
+        background: 'var(--dsw-alias-border-l3, rgba(127,127,127,.35))',
         cursor: 'pointer',
+      },
+      switchTrackOn: { background: 'var(--dsw-alias-brand-primary, #4fb6ad)' },
+      switchThumb: {
+        display: 'block',
+        width: '16px',
+        height: '16px',
+        borderRadius: '50%',
+        'corner-shape': 'round',
+        background: 'var(--dsw-alias-switch-thumb, #c8d2df)',
+        transition: 'transform 120ms ease',
+      },
+      switchThumbOn: {
+        transform: 'translateX(16px)',
+        background: 'var(--dsw-alias-label-primary-foreground, #0b1220)',
       },
       section: { display: 'flex', flexDirection: 'column', width: '100%', padding: '4px 0 24px' },
       sectionTitle: { fontSize: '18px', lineHeight: '24px', fontWeight: 600, color: 'var(--dsw-alias-label-primary, inherit)' },
@@ -367,6 +458,46 @@ window.__ModuleLoader__.load({
         whiteSpace: 'nowrap',
       },
     };
+
+    /**
+     * Tool descriptions come from the host, which registers them in English only. A locale that
+     * carries `tool_<name>` overrides it, so a translated UI does not show an English tooltip.
+     * `t()` echoes the key back when it has no entry, which is how the fallback is detected.
+     */
+    function toolText(t, tool) {
+      const key = `tool_${tool.name}`;
+      const localised = t(key);
+      if (typeof localised === 'string' && localised !== key) return localised;
+      return tool.description || '';
+    }
+
+    /**
+     * A text button that says "已开启" reads as a status label, not as a control: you cannot
+     * tell by looking whether clicking it opens or closes. A slide switch shows the state and
+     * the affordance at once, so the settings rows use this instead of a button.
+     */
+    function Switch({ on, onClick, disabled, label, stateOn, stateOff }) {
+      const title = stateOn === undefined ? label : `${label} · ${on === true ? stateOn : stateOff}`;
+      return h(
+        'button',
+        {
+          type: 'button',
+          role: 'switch',
+          'aria-checked': on === true ? 'true' : 'false',
+          'aria-label': title,
+          title,
+          disabled: disabled === true,
+          onClick,
+          style: {
+            ...styles.switchTrack,
+            ...(on === true ? styles.switchTrackOn : null),
+            opacity: disabled === true ? 0.5 : 1,
+            cursor: disabled === true ? 'default' : 'pointer',
+          },
+        },
+        h('span', { style: on === true ? { ...styles.switchThumb, ...styles.switchThumbOn } : styles.switchThumb }),
+      );
+    }
 
     /**
      * The settings page that owns guest mode for every conversation. It replaced the two
@@ -458,16 +589,14 @@ window.__ModuleLoader__.load({
             h('div', { style: styles.settingsTitle }, t('defaultGuest')),
             h('div', { style: styles.settingsDesc }, t('defaultGuestHint')),
           ),
-          h(
-            'button',
-            {
-              type: 'button',
-              disabled: busy !== undefined || data === undefined,
-              onClick: () => setDefault(!defaultOn),
-              style: styles.switchButton,
-            },
-            defaultOn ? t('switchOn') : t('switchOff'),
-          ),
+          h(Switch, {
+            on: defaultOn,
+            disabled: busy !== undefined || data === undefined,
+            onClick: () => setDefault(!defaultOn),
+            label: t('defaultGuest'),
+            stateOn: t('switchOn'),
+            stateOff: t('switchOff'),
+          }),
         ),
         h(
           'div',
@@ -489,16 +618,14 @@ window.__ModuleLoader__.load({
                     h('div', { style: styles.sessionName }, row.title.length > 0 ? row.title : t('unnamedSession')),
                     h('div', { style: styles.settingsDesc }, row.live ? t('liveBadge') : shortId(row.id)),
                   ),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      disabled: busy !== undefined,
-                      onClick: () => setGuest(row.id, row.guest !== true),
-                      style: styles.switchButton,
-                    },
-                    row.guest ? t('switchOn') : t('switchOff'),
-                  ),
+                  h(Switch, {
+                    on: row.guest === true,
+                    disabled: busy !== undefined,
+                    onClick: () => setGuest(row.id, row.guest !== true),
+                    label: row.title.length > 0 ? row.title : t('unnamedSession'),
+                    stateOn: t('switchOn'),
+                    stateOff: t('switchOff'),
+                  }),
                 ),
               ),
       );
@@ -701,14 +828,15 @@ window.__ModuleLoader__.load({
 
       if (open) {
         const rows = shown.length
-          ? shown.map((tool) =>
-              h(
+          ? shown.map((tool) => {
+              const hint = toolText(t, tool);
+              return h(
                 'button',
                 {
                   key: tool.name,
                   type: 'button',
                   disabled: busy === tool.name,
-                  title: tool.name,
+                  title: hint ? `${tool.name} — ${hint}` : tool.name,
                   onClick: () => toggle(tool.name, !tool.enabled),
                   style: styles.row(tool.enabled),
                 },
@@ -719,8 +847,8 @@ window.__ModuleLoader__.load({
                   { style: { flex: 'none', fontSize: '11px', opacity: 0.7 } },
                   tool.enabled ? t('on') : t('off'),
                 ),
-              ),
-            )
+              );
+            })
           : [
               h(
                 'div',
@@ -758,8 +886,11 @@ window.__ModuleLoader__.load({
           : [h('div', { key: 'none', style: styles.empty }, templates === undefined ? t('loading') : t('emptyTemplates'))];
 
         const statusNotes = [];
-        if ((board?.blocked ?? 0) > 0) {
-          statusNotes.push(h('div', { key: 'blocked', style: styles.statusNote }, t('blocked').replace('{n}', String(board.blocked))));
+        if (board?.guest === true) {
+          const blocked = board.blocked ?? 0;
+          statusNotes.push(
+            h('div', { key: 'blocked', style: styles.statusNote }, blocked > 0 ? t('blocked').replace('{n}', String(blocked)) : t('blockedNone')),
+          );
         }
         for (const [index, note] of (board?.degraded ?? []).entries()) {
           statusNotes.push(h('div', { key: `degraded-${index}`, style: styles.statusBad }, `${t('degraded')}: ${note}`));
@@ -767,22 +898,22 @@ window.__ModuleLoader__.load({
 
         const toolsBody = [
           h(
-            'button',
-            {
-              key: 'guest',
-              type: 'button',
-              disabled: busy === 'guest',
-              title: t('guestHint'),
-              onClick: () => toggleGuest(board?.guest !== true),
-              style: styles.guestRow,
-            },
-            h('span', { style: styles.check(board?.guest === true) }, board?.guest === true ? '✓' : ''),
+            'div',
+            { key: 'guest', style: styles.guestRow },
             h(
               'span',
               { style: styles.guestText },
               h('span', null, t('guest')),
               h('span', { style: styles.guestSub }, t('guestHint')),
             ),
+            h(Switch, {
+              on: board?.guest === true,
+              disabled: busy === 'guest',
+              onClick: () => toggleGuest(board?.guest !== true),
+              label: t('guest'),
+              stateOn: t('switchOn'),
+              stateOff: t('switchOff'),
+            }),
           ),
           statusNotes.length === 0 ? null : h('div', { key: 'status', style: styles.status }, statusNotes),
           h('input', {
@@ -798,6 +929,7 @@ window.__ModuleLoader__.load({
             'div',
             { key: 'footer', style: styles.footer },
             h('span', { style: styles.count }, `${board?.enabledCount ?? 0}/${tools.length}`),
+            h('span', { key: 'version', style: styles.version }, `v${VERSION}`),
             h('button', { type: 'button', style: styles.link, onClick: () => setMode('templates') }, t('templates')),
             h('button', { type: 'button', style: styles.done, onClick: () => setOpen(false) }, t('close')),
           ),

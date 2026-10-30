@@ -159,6 +159,21 @@ plugin_manager action=install_bundle target=<本地绝对路径 或 本仓库 np
 - `tools.restrict()` / `tools.guard()` 抛错不再只写 console：错误记进该会话的 `degraded`，面板顶部显示「部分设置没生效：…」，`/tools` 输出里也会带一句。
 - 每次被守卫拒绝都会累加 `blocked`，面板与 `/tools` 显示「已拦截 N 次越界访问」，附带最后一次的拒绝原因——否则用户没法确认访客模式真的在干活。
 
+## 兼容性
+
+`package.json` 里现在声明了 `engines`：
+
+```json
+"engines": {
+  "node": ">=22.12.0",
+  "dsh": "^0.2.0-rc.1"
+}
+```
+
+DSH 的插件管理器读的是 `engines.dsh`（没有时才回退到 `@deepseek-ai/*` 的 `peerDependencies`），不满足会**直接拦下安装/启用**，并给出 `nextStep`；`engines.node` 只是给 pnpm 的提示。
+
+范围取宽松的 `^0.2.0-rc.1`（覆盖整个 0.2.x）。插件用到的 `ctx.tools.view()`、`agent.ctx.tools.restrict()/guard()`、`session.requestHeader()`、`agent/created` 事件在 0.2.x 早期就已存在；如果装到确实缺这些 API 的内核上，症状是「工具列表为空 / 状态恢复不出结果」，而不是崩溃——先关掉访客模式再排查。
+
 ## 已知限制
 
 - 只能**移除**工具，不能凭空添加（`restrict` 的语义决定的）

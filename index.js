@@ -295,6 +295,16 @@ export function apply(ctx) {
   const degraded = new Map();
   /** session id -> { count, last } of guest-mode refusals */
   const refusals = new Map();
+  // Tool descriptions are captured while a tool is still visible: once a restriction is in
+  // place the definition is gone from `view`, and a switched-off row would lose its help text.
+  const descriptions = new Map();
+
+  function rememberDescriptions(view) {
+    for (const [name, definition] of view.visible) {
+      const text = typeof definition?.description === 'string' ? definition.description.replace(/\s+/g, ' ').trim() : '';
+      if (text.length > 0) descriptions.set(name, text.length > 400 ? `${text.slice(0, 400)}…` : text);
+    }
+  }
 
   function noteRefusal(sessionId, reason) {
     const current = refusals.get(sessionId) ?? { count: 0, last: '' };
@@ -331,12 +341,17 @@ export function apply(ctx) {
 
   function board(sessionId, agent) {
     const view = ctx.tools.view(agent);
+    rememberDescriptions(view);
     const record = store.recordOf(sessionId);
     const off = new Set(record.disabled);
     const tools = [...view.restrictableNames]
       .filter((name) => !RESERVED.has(name))
       .sort()
-      .map((name) => ({ name, enabled: view.visible.has(name) && !off.has(name) }));
+      .map((name) => ({
+        name,
+        enabled: view.visible.has(name) && !off.has(name),
+        description: descriptions.get(name) ?? (typeof view.visible.get(name)?.description === 'string' ? view.visible.get(name).description : ''),
+      }));
     const refusal = refusals.get(sessionId);
     return {
       sessionId,
@@ -369,6 +384,7 @@ export function apply(ctx) {
 
     const problems = [];
     const view = ctx.tools.view(agent);
+    rememberDescriptions(view);
     const record = store.recordOf(agent.id);
     const deny = new Set(record.disabled.filter((name) => !RESERVED.has(name) && view.restrictableNames.has(name)));
     if (record.guest) {
@@ -532,15 +548,14 @@ export function apply(ctx) {
         defaults: { guest: store.defaults.guest === true },
         sessions: [...rows.values()]
           .map((row) => ({ ...row, live: liveIds.has(row.id), archived: archived.has(row.id) }))
-          .filter(
-            (row) =>
-              row.child !== true &&
-              (row.live ||
-                row.guest ||
-                // a row without a workspace is usually a leftover record from an old profile run:
-                // keep it only when it carries a real name
-                (row.title.length > 0 && (owned.size === 0 || owned.has(row.id)))),
-          )
+          .filter((row) => {
+            if (row.child === true) return false;
+            if (row.live) return true;
+            // A stored record outlives its conversation: once the log is gone the id is only
+            // noise ("未命名会话" + a raw UUID), so a closed row must still be owned by a
+            // workspace. Without a registry every id looks owned, so fall back to a real name.
+            return owned.size === 0 ? row.title.length > 0 : owned.has(row.id);
+          })
           .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0) || left.id.localeCompare(right.id)),
       };
     }

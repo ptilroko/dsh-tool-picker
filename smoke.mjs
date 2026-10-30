@@ -30,7 +30,7 @@ const ctx = {
   },
   tools: {
     view: () => ({
-      visible: new Map([['bash', {}], ['read', {}]]),
+      visible: new Map([['bash', { description: 'Run a shell command inside the session workspace.' }], ['read', { description: 'Read a UTF-8 file and return line-numbered content.' }]]),
       knownNames: new Set(['bash', 'read', 'run_code', 'pwsh']),
       restrictableNames: new Set(['bash', 'read', 'run_code', 'pwsh']),
     }),
