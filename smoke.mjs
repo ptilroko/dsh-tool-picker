@@ -1,4 +1,7 @@
-import { apply, inject } from './index.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { apply, inject, SelectionStore } from './index.js';
 
 const registered = [];
 const layers = [];
@@ -195,3 +198,22 @@ apply(brokenCtx);
 const [, brokenPicker] = brokenRegistered.find(([name]) => name === 'toolPicker');
 brokenPicker.setEnabled('session-2', 'bash', false);
 console.log('DEGRADED', JSON.stringify(brokenPicker.state('session-2').degraded));
+
+// --- issue #1: an explicit "all tools on" must survive a restart ----------------
+// The reporter's sequence: defaults switch guest mode on, the user turns guest mode
+// off for one conversation, and the reload drops the record because it now looks
+// exactly like the default — so the next start resurrects guest mode.
+const persistFile = join(mkdtempSync(join(tmpdir(), 'dsh-tool-picker-')), 'state.json');
+const firstRun = new SelectionStore(persistFile);
+firstRun.setDefaults({ disabled: [], guest: true });
+firstRun.setRecord('session-x', { disabled: [], guest: false });
+const secondRun = new SelectionStore(persistFile);
+console.log(
+  'EXPLICIT ALL-ON SURVIVES RESTART',
+  JSON.stringify({
+    has: secondRun.hasRecord('session-x'),
+    record: secondRun.recordOf('session-x'),
+    defaults: secondRun.defaults,
+  }),
+);
+

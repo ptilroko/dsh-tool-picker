@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-tool-picker';
     const PACKAGE = 'dsh-tool-picker';
     /** Shown in the panel footer: the only way to tell a stale bundle from a stale host. */
-    const VERSION = '1.1.5';
+    const VERSION = '1.1.7';
 
     /** Zod is only used for the descriptor's introspection schema; the call path never parses. */
     let zod;

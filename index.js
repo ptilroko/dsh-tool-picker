@@ -81,17 +81,21 @@ function recordOf(value) {
  * Durable, best-effort per-session selection plus reusable templates.
  * A missing or broken file means "all tools on".
  */
-class SelectionStore {
-  constructor() {
-    this.file = join(profileDirectory(), 'data', 'dsh-tool-picker', 'state.json');
+export class SelectionStore {
+  constructor(file = join(profileDirectory(), 'data', 'dsh-tool-picker', 'state.json')) {
+    this.file = file;
     this.sessions = Object.create(null);
     this.templates = Object.create(null);
     this.defaults = { disabled: [], guest: false };
     try {
       const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
       for (const [id, value] of Object.entries(parsed?.sessions ?? {})) {
-        const record = recordOf(value);
-        if (record.disabled.length > 0 || record.guest) this.sessions[id] = record;
+        // Keep EVERY stored record, including one that happens to look exactly like the
+        // default. Turning every tool back on (and guest mode off) is an explicit choice:
+        // dropping it here would make the conversation indistinguishable from one that was
+        // never configured, and the next start would fall back to the defaults (or to the
+        // log heuristic), resurrecting guest mode against the user's wish.
+        if (typeof id === 'string' && id.length > 0) this.sessions[id] = recordOf(value);
       }
       for (const [name, value] of Object.entries(parsed?.templates ?? {})) {
         if (typeof name === 'string' && name.length > 0) this.templates[name] = recordOf(value);
@@ -550,6 +554,10 @@ export function apply(ctx) {
           .map((row) => ({ ...row, live: liveIds.has(row.id), archived: archived.has(row.id) }))
           .filter((row) => {
             if (row.child === true) return false;
+            // A conversation that never got a first message is a blank "new chat" someone
+            // abandoned mid-click: it has no name, nothing to restrict, and would otherwise
+            // fill this list with "未命名会话". Only keep it while it is actually open.
+            if (row.blank === true) return row.live;
             if (row.live) return true;
             // A stored record outlives its conversation: once the log is gone the id is only
             // noise ("未命名会话" + a raw UUID), so a closed row must still be owned by a
