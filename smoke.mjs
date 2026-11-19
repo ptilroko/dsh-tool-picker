@@ -1,6 +1,6 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { apply, inject, SelectionStore } from './index.js';
 
 const registered = [];
@@ -89,6 +89,9 @@ console.log('guard url allowed   ', probe('fetch', { url: 'https://example.com/a
 
 console.log('CMD list', JSON.stringify(command.handler({ agent, rawInput: '' })));
 console.log('CMD off', JSON.stringify(command.handler({ agent, rawInput: 'off read' })));
+console.log('CMD off batch', JSON.stringify(command.handler({ agent, rawInput: 'off bash, pwsh' })));
+console.log('CMD off unknown', JSON.stringify(command.handler({ agent, rawInput: 'off nosuchtool' })));
+console.log('CMD on batch', JSON.stringify(command.handler({ agent, rawInput: 'on bash,pwsh' })));
 console.log('CMD guest off', JSON.stringify(command.handler({ agent, rawInput: 'guest off' })));
 console.log('CMD save', JSON.stringify(command.handler({ agent, rawInput: 'save 访客' })));
 console.log('CMD templates', JSON.stringify(command.handler({ agent, rawInput: 'templates' })));
@@ -216,4 +219,79 @@ console.log(
     defaults: secondRun.defaults,
   }),
 );
+
+// --- guest mode marks its own rows as forced -------------------------------------
+picker.setGuest('session-1', true);
+console.log(
+  'FORCED ROWS',
+  JSON.stringify(picker.state('session-1').tools.filter((tool) => tool.forced === true).map((tool) => tool.name)),
+);
+picker.setGuest('session-1', false);
+
+// --- a tool installed later must not look "switched off" -------------------------
+// The log header only lists what existed then. Restoring it verbatim would deny every tool
+// added since — silently, with the UI claiming the user turned it off.
+let createdForKnown;
+const knownAgent = {
+  id: 'session-90',
+  session: { header: { cwd: 'E:\\Documents\\deepseek-harness\\default-workspace' }, requestHeader: () => ({ tools: [{ name: 'bash' }] }) },
+  ctx: agent.ctx,
+};
+const knownCtx = {
+  provide: () => {},
+  on: (name, fn) => {
+    if (name === 'agent/created') createdForKnown = fn;
+    return () => {};
+  },
+  agents: { get: (id) => (id === knownAgent.id ? knownAgent : undefined), list: () => [] },
+  tools: {
+    view: () => ({
+      visible: new Map([['bash', { description: 'shell' }]]),
+      knownNames: new Set(['bash', 'read', 'brandnew']),
+      restrictableNames: new Set(['bash', 'read', 'brandnew']),
+    }),
+  },
+  inject: () => {},
+  get: () => undefined,
+};
+const universeFile = join(mkdtempSync(join(tmpdir(), 'dsh-tool-picker-')), 'state.json');
+new SelectionStore(universeFile).rememberTools(['bash', 'read']);
+apply(knownCtx, { stateFile: universeFile });
+createdForKnown({ agent: knownAgent, source: 'resume' });
+console.log('NEW TOOL NOT DISABLED', JSON.stringify(new SelectionStore(universeFile).recordOf('session-90')));
+
+// --- an abandoned "new chat" stays out of the list even though it has a record ---
+let blankRegistered = [];
+const blankFile = join(mkdtempSync(join(tmpdir(), 'dsh-tool-picker-')), 'state.json');
+new SelectionStore(blankFile).setRecord('session-55', { disabled: [], guest: true });
+const blankCtx = {
+  provide: (name, value) => blankRegistered.push([name, value]),
+  on: () => () => {},
+  agents: { get: () => undefined, list: () => [] },
+  tools: { view: () => ({ visible: new Map(), knownNames: new Set(), restrictableNames: new Set() }) },
+  inject: () => {},
+  get: (name) => {
+    if (name === 'sessionController') {
+      return {
+        async list() {
+          return { items: [{ sessionId: 'session-55', updatedAt: 5, projections: { values: { title: null, sessionListMetadata: { blank: true } } } }] };
+        },
+      };
+    }
+    if (name === 'workspaceRegistry') return { archivedSessionIds: [], list: () => [{ sessionIds: ['session-55'] }] };
+    return undefined;
+  },
+};
+apply(blankCtx, { stateFile: blankFile });
+const [, blankPicker] = blankRegistered.find(([name]) => name === 'toolPicker');
+console.log('BLANK ROW HIDDEN', JSON.stringify((await blankPicker.sessions()).sessions.map((row) => row.id)));
+
+// --- the state file is written through a temp file, never left half-written -------
+console.log('ATOMIC WRITE LEFTOVER', JSON.stringify(readdirSync(dirname(persistFile))));
+
+// --- the two version strings agree ------------------------------------------------
+const pkg = JSON.parse(readFileSync(join('.', 'package.json'), 'utf8'));
+const source = readFileSync(join('.', 'client.js'), 'utf8');
+const clientVersion = /const VERSION = '([^']+)'/.exec(source)?.[1];
+console.log('VERSION MATCH', JSON.stringify({ package: pkg.version, client: clientVersion, ok: pkg.version === clientVersion }));
 

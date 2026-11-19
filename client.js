@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-tool-picker';
     const PACKAGE = 'dsh-tool-picker';
     /** Shown in the panel footer: the only way to tell a stale bundle from a stale host. */
-    const VERSION = '1.1.7';
+    const VERSION = '1.2.0';
 
     /** Zod is only used for the descriptor's introspection schema; the call path never parses. */
     let zod;
@@ -75,6 +75,8 @@ window.__ModuleLoader__.load({
       imported: '已导入',
       guest: '访客模式',
       guestHint: '文件操作仅限本工作区；shell、子代理自动关闭',
+      forced: '访客强制',
+      forcedHint: '访客模式期间强制关闭；先关闭访客模式再调整',
   blocked: '已拦截 {n} 次越界访问',
   blockedNone: '暂时没有越界访问',
   degraded: '部分设置没生效',
@@ -185,6 +187,8 @@ window.__ModuleLoader__.load({
       imported: 'Imported',
       guest: 'Guest mode',
       guestHint: 'File access stays inside this workspace; shell and sub-agents are off',
+      forced: 'Guest lock',
+      forcedHint: 'Held off by guest mode; turn guest mode off to change it',
   blocked: 'Blocked {n} out-of-workspace attempt(s)',
   blockedNone: 'No out-of-workspace attempts yet',
   degraded: 'Some switches did not apply',
@@ -830,22 +834,23 @@ window.__ModuleLoader__.load({
         const rows = shown.length
           ? shown.map((tool) => {
               const hint = toolText(t, tool);
+              const forced = tool.forced === true;
               return h(
                 'button',
                 {
                   key: tool.name,
                   type: 'button',
-                  disabled: busy === tool.name,
-                  title: hint ? `${tool.name} — ${hint}` : tool.name,
+                  disabled: busy === tool.name || forced,
+                  title: forced ? `${tool.name} — ${t('forcedHint')}` : hint ? `${tool.name} — ${hint}` : tool.name,
                   onClick: () => toggle(tool.name, !tool.enabled),
-                  style: styles.row(tool.enabled),
+                  style: { ...styles.row(tool.enabled), ...(forced ? { opacity: 0.6, cursor: 'default' } : null) },
                 },
                 h('span', { style: styles.check(tool.enabled) }, tool.enabled ? '✓' : ''),
                 h('span', { style: styles.name }, tool.name),
                 h(
                   'span',
                   { style: { flex: 'none', fontSize: '11px', opacity: 0.7 } },
-                  tool.enabled ? t('on') : t('off'),
+                  forced ? t('forced') : tool.enabled ? t('on') : t('off'),
                 ),
               );
             })

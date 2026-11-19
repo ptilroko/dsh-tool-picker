@@ -114,8 +114,9 @@ plugin_manager action=install_bundle target=<本地绝对路径 或 本仓库 np
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "defaults": { "disabled": [], "guest": false },
+  "known": ["bash", "read", "write"],
   "sessions": {
     "<sessionId>": { "disabled": ["write"], "guest": true }
   },
@@ -126,8 +127,9 @@ plugin_manager action=install_bundle target=<本地绝对路径 或 本仓库 np
 ```
 
 - `disabled` 记的是**被关掉的**工具名，不是允许列表——这样新工具默认就是开着的
+- `known` 是这份 profile 见过（可限制）的全部工具名，用来在「按日志恢复」时区分「用户关掉的」和「后来才装的」
 - 无会话记录时读到的是「全开、访客关」，**不会**继承 `defaults`（`defaults` 只在会话启动时拷一份，避免老会话被全局开关牵连）
-- 写盘失败只记 warn，不阻塞会话
+- 写盘走「临时文件 + rename」，中途崩掉不会留下截断的 JSON；写盘失败只记 warn，不阻塞会话
 
 ### 真相源：会话日志优先
 
@@ -135,10 +137,13 @@ plugin_manager action=install_bundle target=<本地绝对路径 或 本仓库 np
 
 - `session.requestHeader()` 折出最近一次请求里模型实际看到的工具名；
 - 与当前可限制集合相减，得到「被关掉的那些」；
+- 只把 `known` 里出现过的名字算进这个差集：日志里没有的新工具是「刚装的」，不是「被关掉的」，否则装个插件就等于把工具静默收走；
 - 有 `request/header` 的会话（老对话、fork、从别的机器拷来的转录）按日志恢复，包括「一条都没关」；
 - 完全没有 `request/header` 的会话才算新会话，此时才拷 `defaults`。
 
 `request/header` 与配套的 `developer/message`（里面记着 `tool-removal` / `tool-addition` 块）都是宿主自己写的，所以「模型看不到哪个工具」这件事天然可从日志重建——换机器、回滚 profile、删掉 `state.json` 都不会把工具偷偷放回来。访客模式本身是插件偏好（日志里没有），恢复时按「shell 与子代理全关、文件工具还在」这个特征反推。
+
+访客模式开着时，`bash`/`pwsh`/`subagent` 这几行是被访客层强制关掉的，面板把它们标成「访客强制」并禁用开关——否则点了会立刻弹回去，看起来像坏了。
 
 ## 实现说明
 
@@ -181,6 +186,8 @@ DSH 的插件管理器读的是 `engines.dsh`（没有时才回退到 `@deepseek
 - 会话自己注册的工具不受控（它们不在可限制集合里）
 - 子代理不继承父会话的守卫，所以访客模式直接禁掉 `subagent` / `workflow`
 - 访客模式只是**工具层**约束：工作区外读取被拦，但沙箱模式本身仍按 DSH 设置走（想更彻底可以同时把会话沙箱切到 `workspace-write` / `read-only`）
+- 访客模式是**推断**出来的（日志里没有它的记录）：如果你手动把 `bash`/`pwsh`/`subagent` 一起关掉，重开这个会话也会被当成访客模式，多出一层路径守卫
+- 恢复只在会话**没有本地记录**时发生；一旦有了记录，`state.json` 就是那份会话的权威，日志不再回写（换机器请连 `state.json` 一起拷）
 - 客户端的 bundle 在**宿主启动时**快照：改了 `client.js` 必须重启宿主，刷新页面无效
 
 ## 开发
@@ -190,7 +197,7 @@ node smoke.mjs        # 假 ctx 跑一遍 state/setEnabled/setGuest/templates/�
 node --check client.js
 ```
 
-`smoke.mjs` 用伪造的 `ctx`（tools/agents/provide/on/inject）验证 Host 侧逻辑，不需要启动 DSH。
+`smoke.mjs` 用伪造的 `ctx`（tools/agents/provide/on/inject）验证 Host 侧逻辑，不需要启动 DSH。最后几条断言覆盖：访客强制行、新装工具不被误判为关闭、空会话不出现在设置页、原子写不留 `.tmp`、`package.json` 与 `client.js` 版本号一致。
 
 ## License
 

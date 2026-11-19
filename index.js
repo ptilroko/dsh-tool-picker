@@ -18,7 +18,7 @@
  * a service registered with `ctx.provide()`, a `typertRemote` binding, and the prototype
  * marker the gateway's source fallback reads.
  */
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -87,6 +87,12 @@ export class SelectionStore {
     this.sessions = Object.create(null);
     this.templates = Object.create(null);
     this.defaults = { disabled: [], guest: false };
+    /**
+     * Every tool name this profile has ever seen as restrictable. Restoring a session from
+     * its log needs it: a tool that did not exist when the conversation last ran is missing
+     * from that log header, and without this set it would be mistaken for "switched off".
+     */
+    this.known = new Set();
     try {
       const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
       for (const [id, value] of Object.entries(parsed?.sessions ?? {})) {
@@ -101,9 +107,29 @@ export class SelectionStore {
         if (typeof name === 'string' && name.length > 0) this.templates[name] = recordOf(value);
       }
       if (parsed?.defaults !== undefined) this.defaults = recordOf(parsed.defaults);
+      for (const name of Array.isArray(parsed?.known) ? parsed.known : []) {
+        if (typeof name === 'string' && name.length > 0) this.known.add(name);
+      }
     } catch {
       /* no state yet, or unreadable: every session starts with all tools enabled */
     }
+  }
+
+  /** Every tool name this profile has seen so far (a copy, so callers cannot mutate it). */
+  knownTools() {
+    return new Set(this.known);
+  }
+
+  /** Remember tool names that exist now; they are never removed, so a rename is a no-op. */
+  rememberTools(names) {
+    let added = 0;
+    for (const name of names) {
+      if (typeof name === 'string' && name.length > 0 && !this.known.has(name)) {
+        this.known.add(name);
+        added += 1;
+      }
+    }
+    if (added > 0) this.persist();
   }
 
   /**
@@ -172,8 +198,18 @@ export class SelectionStore {
   persist() {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      const payload = { version: 4, defaults: this.defaults, sessions: this.sessions, templates: this.templates };
-      writeFileSync(this.file, `${JSON.stringify(payload, null, 2)}\n`);
+      const payload = {
+        version: 5,
+        defaults: this.defaults,
+        known: [...this.known].sort(),
+        sessions: this.sessions,
+        templates: this.templates,
+      };
+      // Write-then-rename. A crash halfway through a direct overwrite leaves a truncated
+      // file, which would drop every session's record AND the defaults in one go.
+      const temporary = `${this.file}.tmp`;
+      writeFileSync(temporary, `${JSON.stringify(payload, null, 2)}\n`);
+      renameSync(temporary, this.file);
     } catch (error) {
       console.warn(`[dsh-tool-picker] cannot persist selection: ${String(error)}`);
     }
@@ -219,6 +255,9 @@ function looksLikePath(value) {
   if (value.length === 0 || value.length > 400) return false;
   if (/[\r\n]/.test(value)) return false;
   if (isAbsolute(value)) return true;
+  // `C:notes.txt` is a drive-relative path: not absolute, but it is still a location the
+  // filesystem resolves against that drive's current directory.
+  if (/^[A-Za-z]:/.test(value)) return true;
   if (/[\\/]/.test(value)) return true;
   return value === '.' || value === '..';
 }
@@ -291,8 +330,8 @@ function guestGuard(root, onBlock) {
 
 export const inject = ['tools', 'agents'];
 
-export function apply(ctx) {
-  const store = new SelectionStore();
+export function apply(ctx, config = {}) {
+  const store = new SelectionStore(config?.stateFile);
   /** session id -> disposers of that agent's own restriction and guard layers */
   const layers = new Map();
   /** session id -> what could not be applied, so the UI can stop claiming it worked */
@@ -346,14 +385,19 @@ export function apply(ctx) {
   function board(sessionId, agent) {
     const view = ctx.tools.view(agent);
     rememberDescriptions(view);
+    store.rememberTools(view.restrictableNames);
     const record = store.recordOf(sessionId);
     const off = new Set(record.disabled);
+    const guestOn = record.guest === true;
     const tools = [...view.restrictableNames]
       .filter((name) => !RESERVED.has(name))
       .sort()
       .map((name) => ({
         name,
         enabled: view.visible.has(name) && !off.has(name),
+        // Guest mode adds its own deny layer that the user cannot undo from this row: the
+        // switch would silently spring back, so the client shows it as forced instead.
+        forced: guestOn && GUEST_BLOCKED.includes(name),
         description: descriptions.get(name) ?? (typeof view.visible.get(name)?.description === 'string' ? view.visible.get(name).description : ''),
       }));
     const refusal = refusals.get(sessionId);
@@ -372,6 +416,8 @@ export function apply(ctx) {
   function dispose(agentId) {
     const previous = layers.get(agentId);
     layers.delete(agentId);
+    degraded.delete(agentId);
+    refusals.delete(agentId);
     if (previous === undefined) return;
     for (const disposer of previous) {
       try {
@@ -389,6 +435,7 @@ export function apply(ctx) {
     const problems = [];
     const view = ctx.tools.view(agent);
     rememberDescriptions(view);
+    store.rememberTools(view.restrictableNames);
     const record = store.recordOf(agent.id);
     const deny = new Set(record.disabled.filter((name) => !RESERVED.has(name) && view.restrictableNames.has(name)));
     if (record.guest) {
@@ -453,7 +500,11 @@ export function apply(ctx) {
       const record = store.recordOf(sessionId);
       store.setRecord(sessionId, { disabled: record.disabled, guest: enabled === true });
       const agent = live(sessionId);
-      if (agent === undefined) return { sessionId, live: false, guest: enabled === true, tools: [], enabledCount: 0 };
+      if (agent === undefined) {
+        // Same shape as `state()`: a caller that renders a returned board must not have to
+        // special-case "closed session" with undefined counters.
+        return { sessionId, live: false, guest: enabled === true, tools: [], enabledCount: 0, blocked: 0, lastBlocked: '', degraded: [] };
+      }
       materialise(agent);
       return board(sessionId, agent);
     }
@@ -461,12 +512,16 @@ export function apply(ctx) {
     /** Every conversation this profile knows about, with its guest-mode state. */
     async sessions() {
       const rows = new Map();
-      const remember = (id, title, updatedAt, blank = false) => {
+      const remember = (id, title, updatedAt, blank) => {
         const current = rows.get(id);
         if (current !== undefined) {
           if (current.title.length === 0 && title.length > 0) current.title = title;
           if ((current.updatedAt ?? 0) < (updatedAt ?? 0)) current.updatedAt = updatedAt ?? 0;
-          current.blank = current.blank && blank !== false;
+          // Only an authoritative answer may change `blank`: the store's id list and the live
+          // agent list know nothing about it, and letting their silence clear the flag would
+          // bring every abandoned "new chat" back into this list.
+          if (blank === true) current.blank = true;
+          else if (blank === false) current.blank = false;
           return;
         }
         rows.set(id, {
@@ -502,7 +557,8 @@ export function apply(ctx) {
           for (const item of listed?.items ?? []) {
             const id = item?.sessionId ?? item?.id;
             if (typeof id !== 'string' || id.length === 0) continue;
-            const blank = item?.blank === true || item?.projections?.values?.sessionListMetadata?.blank === true;
+            const metadata = item?.projections?.values?.sessionListMetadata;
+            const blank = typeof item?.blank === 'boolean' ? item.blank : metadata?.blank === true ? true : metadata?.blank === false ? false : undefined;
             remember(id, titleOf(item), item.updatedAt ?? item.createdAt, blank);
             if (item?.parentSessionId !== undefined) rememberChild(id);
           }
@@ -752,9 +808,25 @@ export function apply(ctx) {
           }
           if (name.length === 0) return { kind: 'error', text: `用法：/tools ${verb} <工具名>` };
           const enabled = verb === 'on';
-          for (const toolName of name.split(/[,，]/).map((part) => part.trim()).filter(Boolean)) {
-            picker.setEnabled(sessionId, toolName, enabled);
+          const names = name
+            .split(/[,，]/)
+            .map((part) => part.trim())
+            .filter(Boolean);
+          const now = ctx.agents.get(sessionId);
+          if (now === undefined) return { kind: 'error', text: `会话 ${sessionId} 已不在运行` };
+          const view = ctx.tools.view(now);
+          const unknown = names.filter((toolName) => RESERVED.has(toolName) || !view.restrictableNames.has(toolName));
+          if (unknown.length > 0) return { kind: 'error', text: `未知工具：${unknown.join(', ')}` };
+          // One record write and one layer rebuild for the whole list: `/tools off a b c`
+          // used to rebuild the restriction stack once per name.
+          const record = store.recordOf(sessionId);
+          const disabled = new Set(record.disabled);
+          for (const toolName of names) {
+            if (enabled) disabled.delete(toolName);
+            else disabled.add(toolName);
           }
+          store.setRecord(sessionId, { disabled: [...disabled], guest: record.guest });
+          materialise(now);
           return { kind: 'success', text: describe(current()) };
         } catch (error) {
           return { kind: 'error', text: String(error instanceof Error ? error.message : error) };
@@ -776,10 +848,15 @@ export function apply(ctx) {
     // the log says the model saw — including "nothing was restricted".
     if (seen === undefined) return false;
     const view = ctx.tools.view(agent);
-    const missing = [...view.restrictableNames].filter((name) => !RESERVED.has(name) && !seen.has(name));
+    // Only tools that already existed last time can be "missing because someone switched
+    // them off": a tool installed after this conversation last ran is absent from its log
+    // too, and denying it would hide a brand-new capability with no user action to explain it.
+    const universe = store.knownTools();
+    const eligible = (name) => universe.size === 0 || universe.has(name);
+    const missing = [...view.restrictableNames].filter((name) => !RESERVED.has(name) && !seen.has(name) && eligible(name));
     // Guest mode itself is a plugin preference, not a log record; infer it when every shell
     // and sub-agent tool is gone while the file tools stayed, which is its exact footprint.
-    const shellish = GUEST_BLOCKED.filter((name) => view.restrictableNames.has(name));
+    const shellish = GUEST_BLOCKED.filter((name) => view.restrictableNames.has(name) && eligible(name));
     const guest = shellish.length > 0 && shellish.every((name) => missing.includes(name));
     store.setRecord(agent.id, { disabled: missing, guest });
     return true;
@@ -790,7 +867,7 @@ export function apply(ctx) {
       // The log outranks both the profile file and the defaults: a conversation that is
       // reopened (or forked, or copied from another machine) is restored from what it
       // itself recorded. Only a conversation with no recorded request at all is new.
-      if (!restoreFromLog(agent) && source === 'startup') {
+      if (!restoreFromLog(agent) && (source === 'startup' || source === 'resume')) {
         // A conversation that starts now COPIES the defaults as its own record, once.
         // Nothing is inherited on read, so changing the default later cannot touch it.
         store.setRecord(agent.id, { disabled: store.defaults.disabled, guest: store.defaults.guest });
