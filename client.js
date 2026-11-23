@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-tool-picker';
     const PACKAGE = 'dsh-tool-picker';
     /** Shown in the panel footer: the only way to tell a stale bundle from a stale host. */
-    const VERSION = '1.2.0';
+    const VERSION = '1.3.0';
 
     /** Zod is only used for the descriptor's introspection schema; the call path never parses. */
     let zod;
@@ -92,6 +92,9 @@ window.__ModuleLoader__.load({
       liveBadge: '当前打开',
       unnamedSession: '未命名会话',
       emptySessions: '还没有任何会话',
+      staleTitle: '失效记录',
+      staleHint: '有 {n} 条记录对应的会话已被删除，它们不会再出现在上面的列表里。',
+      staleAction: '清理',
       tool_read: '读取文本文件，返回带行号的内容',
       tool_read_image: '读取本地图片并显示',
       tool_write: '写入或整份覆盖一个文本文件',
@@ -205,6 +208,9 @@ window.__ModuleLoader__.load({
       liveBadge: 'Open now',
       unnamedSession: 'Untitled conversation',
       emptySessions: 'No conversations yet',
+      staleTitle: 'Stale records',
+      staleHint: '{n} record(s) belong to conversations that no longer exist; they are hidden from the list above.',
+      staleAction: 'Clean up',
     };
 
     const styles = {
@@ -567,6 +573,17 @@ window.__ModuleLoader__.load({
           .finally(() => setBusy(undefined));
       };
 
+      const prune = () => {
+        setBusy('prune');
+        api
+          .call('pruneStale', [])
+          .then(
+            () => read(),
+            (error) => setFailure(`${t('settingsFailed')}: ${error instanceof Error ? error.message : String(error)}`),
+          )
+          .finally(() => setBusy(undefined));
+      };
+
       // Conversations that were never used have no title and no record: they would only add
       // noise, so the list keeps named ones, open ones, and any session already switched on.
       // Archived conversations stay hidden — the sidebar files them away for a reason.
@@ -632,6 +649,25 @@ window.__ModuleLoader__.load({
                   }),
                 ),
               ),
+        // Records whose conversation was deleted: shown only as a cleanup offer, never as a
+        // switch, because there is no session left for the switch to act on.
+        data !== undefined && (data.stale ?? 0) > 0
+          ? h(
+              'div',
+              { style: styles.settingsRow },
+              h(
+                'div',
+                { style: styles.settingsText },
+                h('div', { style: styles.settingsTitle }, t('staleTitle')),
+                h('div', { style: styles.settingsDesc }, t('staleHint').replace('{n}', String(data.stale))),
+              ),
+              h(
+                'button',
+                { type: 'button', onClick: prune, disabled: busy !== undefined, style: styles.linkButton },
+                t('staleAction'),
+              ),
+            )
+          : null,
       );
     }
 
@@ -1060,6 +1096,13 @@ window.__ModuleLoader__.load({
         description: 'Make brand-new sessions start in guest mode.',
         invocation: { kind: 'direct' },
         parameters: [{ name: 'enabled', description: 'true to default new sessions to guest mode', source: 'json', codec: booleanCodec, strictCodec: booleanCodec }],
+        result: stateResult,
+      },
+      'toolPicker/pruneStale': {
+        service: 'toolPicker',
+        description: 'Forget records whose conversation no longer exists.',
+        invocation: { kind: 'direct' },
+        parameters: [],
         result: stateResult,
       },
       'toolPicker/templates': {

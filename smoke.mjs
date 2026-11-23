@@ -286,6 +286,93 @@ apply(blankCtx, { stateFile: blankFile });
 const [, blankPicker] = blankRegistered.find(([name]) => name === 'toolPicker');
 console.log('BLANK ROW HIDDEN', JSON.stringify((await blankPicker.sessions()).sessions.map((row) => row.id)));
 
+// --- a record whose conversation is gone is hidden, and can be pruned -------------
+const staleFile = join(mkdtempSync(join(tmpdir(), 'dsh-tool-picker-')), 'state.json');
+const staleSeed = new SelectionStore(staleFile);
+staleSeed.setRecord('session-gone', { disabled: [], guest: true });
+staleSeed.setRecord('session-ok', { disabled: ['bash'], guest: false });
+const staleRegistered = [];
+const staleCtx = {
+  provide: (name, value) => staleRegistered.push([name, value]),
+  on: () => () => {},
+  agents: { get: () => undefined, list: () => [] },
+  tools: { view: () => ({ visible: new Map(), knownNames: new Set(), restrictableNames: new Set() }) },
+  inject: () => {},
+  get: (name) => {
+    if (name === 'sessionController') return { async list() { return { items: [{ sessionId: 'session-ok', updatedAt: 5, projections: { values: { title: '还活着的会话' } } }] }; } };
+    if (name === 'workspaceRegistry') return { archivedSessionIds: [], list: () => [{ sessionIds: ['session-ok', 'session-gone'] }] };
+    return undefined;
+  },
+};
+apply(staleCtx, { stateFile: staleFile });
+const [, stalePicker] = staleRegistered.find(([name]) => name === 'toolPicker');
+const staleFeed = await stalePicker.sessions();
+console.log('STALE ROW HIDDEN', JSON.stringify({ rows: staleFeed.sessions.map((row) => row.id), stale: staleFeed.stale }));
+console.log('STALE PRUNED', JSON.stringify(await stalePicker.pruneStale()));
+console.log('STALE RECORD GONE', JSON.stringify(new SelectionStore(staleFile).sessionIds()));
+
+// --- guest mode is inferred only from its exact footprint -------------------------
+const inferenceFile = join(mkdtempSync(join(tmpdir(), 'dsh-tool-picker-')), 'state.json');
+new SelectionStore(inferenceFile).rememberTools(['bash', 'pwsh', 'read']);
+function restoreWith(tools) {
+  let created;
+  const who = {
+    id: `session-${tools.join('-') || 'none'}`.replace(/[^a-z0-9-]/gi, ''),
+    session: { header: { cwd: 'E:\\Documents\\deepseek-harness\\default-workspace' }, requestHeader: () => ({ tools }) },
+    ctx: agent.ctx,
+  };
+  const localCtx = {
+    provide: () => {},
+    on: (name, fn) => {
+      if (name === 'agent/created') created = fn;
+      return () => {};
+    },
+    agents: { get: (id) => (id === who.id ? who : undefined), list: () => [] },
+    tools: {
+      view: () => ({
+        visible: new Map([['read', { description: 'read' }]]),
+        knownNames: new Set(['bash', 'pwsh', 'read']),
+        restrictableNames: new Set(['bash', 'pwsh', 'read']),
+      }),
+    },
+    inject: () => {},
+    get: () => undefined,
+  };
+  apply(localCtx, { stateFile: inferenceFile });
+  created({ agent: who, source: 'resume' });
+  return new SelectionStore(inferenceFile).recordOf(who.id);
+}
+// every shell tool gone and nothing else: that is exactly guest mode
+console.log('GUEST INFERRED', JSON.stringify(restoreWith([{ name: 'read' }])));
+// a shell tool and a file tool gone: someone switched things off by hand
+console.log('GUEST NOT INFERRED', JSON.stringify(restoreWith([])));
+
+// --- a sub-agent inherits guest mode from the session that spawned it -------------
+const childLayers = [];
+const childGuards = [];
+const child = {
+  id: 'session-child',
+  parent: agent,
+  session: { header: { cwd: 'E:\\Documents\\deepseek-harness\\default-workspace', parentSessionId: 'session-1' } },
+  ctx: {
+    tools: {
+      restrict(filter) {
+        childLayers.push(filter);
+        return () => {};
+      },
+      guard(fn) {
+        childGuards.push(fn);
+        return () => {};
+      },
+    },
+  },
+};
+picker.setGuest('session-1', true);
+all.set(child.id, child);
+created({ agent: child, source: 'startup' });
+console.log('CHILD INHERITS GUEST', JSON.stringify({ layers: childLayers, guards: childGuards.length > 0 }));
+picker.setGuest('session-1', false);
+
 // --- the state file is written through a temp file, never left half-written -------
 console.log('ATOMIC WRITE LEFTOVER', JSON.stringify(readdirSync(dirname(persistFile))));
 

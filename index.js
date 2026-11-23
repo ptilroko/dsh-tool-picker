@@ -382,6 +382,20 @@ export function apply(ctx, config = {}) {
     return agent;
   }
 
+  /**
+   * The agent that spawned this one, if any. A sub-agent runs in its own agent context, so a
+   * restriction registered on the parent never reaches it — it has to be applied here instead.
+   */
+  function parentOf(agent) {
+    try {
+      const parentId = agent?.parent?.id ?? agent?.session?.header?.parentSessionId;
+      if (typeof parentId !== 'string' || parentId.length === 0) return undefined;
+      return ctx.agents.get(parentId);
+    } catch {
+      return undefined;
+    }
+  }
+
   function board(sessionId, agent) {
     const view = ctx.tools.view(agent);
     rememberDescriptions(view);
@@ -437,8 +451,14 @@ export function apply(ctx, config = {}) {
     rememberDescriptions(view);
     store.rememberTools(view.restrictableNames);
     const record = store.recordOf(agent.id);
+    // Guest mode is inherited rather than pushed down: a parent that turned it on after this
+    // sub-agent started would otherwise leave it holding a shell. Reading the parent here also
+    // makes the result independent of the order in which the agents are materialised.
+    const parent = parentOf(agent);
+    const parentRecord = parent === undefined ? undefined : store.recordOf(parent.id);
+    const guestOn = record.guest === true || parentRecord?.guest === true;
     const deny = new Set(record.disabled.filter((name) => !RESERVED.has(name) && view.restrictableNames.has(name)));
-    if (record.guest) {
+    if (guestOn) {
       for (const name of GUEST_BLOCKED) {
         if (!RESERVED.has(name) && view.restrictableNames.has(name)) deny.add(name);
       }
@@ -453,9 +473,9 @@ export function apply(ctx, config = {}) {
         problems.push(`工具受限未生效：${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    if (record.guest) {
+    if (guestOn) {
       try {
-        disposers.push(agent.ctx.tools.guard(guestGuard(workspaceOf(agent), (reason) => noteRefusal(agent.id, reason))));
+        disposers.push(agent.ctx.tools.guard(guestGuard(workspaceOf(parent ?? agent), (reason) => noteRefusal(agent.id, reason))));
       } catch (error) {
         console.warn(`[dsh-tool-picker] cannot guard session ${agent.id}: ${String(error)}`);
         problems.push(`路径守卫未生效：${error instanceof Error ? error.message : String(error)}`);
@@ -512,11 +532,16 @@ export function apply(ctx, config = {}) {
     /** Every conversation this profile knows about, with its guest-mode state. */
     async sessions() {
       const rows = new Map();
-      const remember = (id, title, updatedAt, blank) => {
+      // Which ids an authority vouched for: a stored record outlives its conversation, and one
+      // whose log is gone has nothing left to restrict — listing it would only produce an
+      // unnamed row that switches nothing.
+      let listed = false;
+      const remember = (id, title, updatedAt, blank, authoritative = false) => {
         const current = rows.get(id);
         if (current !== undefined) {
           if (current.title.length === 0 && title.length > 0) current.title = title;
           if ((current.updatedAt ?? 0) < (updatedAt ?? 0)) current.updatedAt = updatedAt ?? 0;
+          if (authoritative) current.authoritative = true;
           // Only an authoritative answer may change `blank`: the store's id list and the live
           // agent list know nothing about it, and letting their silence clear the flag would
           // bring every abandoned "new chat" back into this list.
@@ -531,6 +556,7 @@ export function apply(ctx, config = {}) {
           live: false,
           blank: blank === true,
           child: false,
+          authoritative: authoritative === true,
           updatedAt: updatedAt ?? 0,
         });
       };
@@ -553,15 +579,16 @@ export function apply(ctx, config = {}) {
       const controller = ctx.get?.('sessionController');
       if (controller !== undefined && typeof controller.list === 'function') {
         try {
-          const listed = await controller.list({});
-          for (const item of listed?.items ?? []) {
+          const page = await controller.list({});
+          for (const item of page?.items ?? []) {
             const id = item?.sessionId ?? item?.id;
             if (typeof id !== 'string' || id.length === 0) continue;
             const metadata = item?.projections?.values?.sessionListMetadata;
             const blank = typeof item?.blank === 'boolean' ? item.blank : metadata?.blank === true ? true : metadata?.blank === false ? false : undefined;
-            remember(id, titleOf(item), item.updatedAt ?? item.createdAt, blank);
+            remember(id, titleOf(item), item.updatedAt ?? item.createdAt, blank, true);
             if (item?.parentSessionId !== undefined) rememberChild(id);
           }
+          listed = true;
         } catch (error) {
           console.warn(`[dsh-tool-picker] cannot list stored sessions: ${String(error)}`);
         }
@@ -583,7 +610,7 @@ export function apply(ctx, config = {}) {
         } catch {
           /* a session without an eligible first message has no title yet */
         }
-        remember(agent.id, title, 0);
+        remember(agent.id, title, 0, undefined, true);
       }
       for (const id of store.sessionIds()) remember(id, '', 0);
 
@@ -610,6 +637,9 @@ export function apply(ctx, config = {}) {
           .map((row) => ({ ...row, live: liveIds.has(row.id), archived: archived.has(row.id) }))
           .filter((row) => {
             if (row.child === true) return false;
+            // Nothing vouched for this id: its log is gone, so the record is only a leftover
+            // and the row would have no tools to switch. Kept out of the list, prunable below.
+            if (listed && row.authoritative !== true && row.live !== true) return false;
             // A conversation that never got a first message is a blank "new chat" someone
             // abandoned mid-click: it has no name, nothing to restrict, and would otherwise
             // fill this list with "未命名会话". Only keep it while it is actually open.
@@ -621,12 +651,48 @@ export function apply(ctx, config = {}) {
             return owned.size === 0 ? row.title.length > 0 : owned.has(row.id);
           })
           .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0) || left.id.localeCompare(right.id)),
+        // Records left behind by conversations that no longer exist. Only counted when a real
+        // listing answered, because without one "unknown" must not be mistaken for "gone".
+        stale: listed ? store.sessionIds().filter((id) => rows.get(id)?.authoritative !== true).length : 0,
       };
     }
 
     /** Every saved template, sorted by name. */
     templates() {
       return { templates: store.templatesOf() };
+    }
+
+    /**
+     * Forget records whose conversation no longer exists. Deleting a session removes its log
+     * but not this profile file, so without this the settings page keeps showing nameless rows
+     * for conversations that can no longer be restricted.
+     */
+    async pruneStale() {
+      let listed = false;
+      const present = new Set();
+      const controller = ctx.get?.('sessionController');
+      if (controller !== undefined && typeof controller.list === 'function') {
+        try {
+          const result = await controller.list({});
+          for (const item of result?.items ?? []) {
+            const id = item?.sessionId ?? item?.id;
+            if (typeof id === 'string' && id.length > 0) present.add(id);
+          }
+          listed = true;
+        } catch (error) {
+          console.warn(`[dsh-tool-picker] cannot list stored sessions: ${String(error)}`);
+        }
+      }
+      for (const agent of ctx.agents.list()) present.add(agent.id);
+      // Without a listing, "absent from the set" means "unknown", not "gone": prune nothing.
+      if (!listed) return { removed: 0, stale: 0 };
+      let removed = 0;
+      for (const id of store.sessionIds()) {
+        if (present.has(id)) continue;
+        store.clearRecord(id);
+        removed += 1;
+      }
+      return { removed, stale: 0 };
     }
 
     /** Whether brand-new sessions start in guest mode. */
@@ -716,6 +782,7 @@ export function apply(ctx, config = {}) {
           'setEnabled',
           'setGuest',
           'sessions',
+          'pruneStale',
           'defaults',
           'setDefaultGuest',
           'templates',
@@ -739,7 +806,7 @@ export function apply(ctx, config = {}) {
       definitionId: 'dsh-tool-picker',
       name: 'tools',
       description: '列出、关闭或打开本会话可调用的工具（只影响当前会话）',
-      input: { hint: '[on|off|guest|default|reset] [tool]' },
+      input: { hint: '[on|off|guest|default|reset|prune] [tool]' },
       handler: ({ agent, rawInput }) => {
         const sessionId = agent.id;
         const [verb, ...rest] = String(rawInput ?? '').trim().split(/\s+/).filter(Boolean);
@@ -782,6 +849,16 @@ export function apply(ctx, config = {}) {
             picker.setGuest(sessionId, next);
             return { kind: 'success', text: `${next ? '已开启访客模式：文件操作仅限本工作区，shell 与子代理已关闭' : '已关闭访客模式'}。${describe(current())}` };
           }
+          if (verb === 'prune') {
+            // Listing stored sessions is asynchronous and this command handler answers
+            // synchronously, so hand the work off and report it once it lands rather than
+            // blocking the command. The settings page awaits the same call properly.
+            picker.pruneStale().then(
+              (result) => console.log(`[dsh-tool-picker] pruned ${result.removed} stale record(s)`),
+              (error) => console.warn(`[dsh-tool-picker] cannot prune stale records: ${String(error)}`),
+            );
+            return { kind: 'success', text: '已请求清理失效记录，稍后刷新设置页可看到结果。' };
+          }
           if (verb === 'templates') {
             const list = store.templatesOf();
             return {
@@ -803,7 +880,7 @@ export function apply(ctx, config = {}) {
           if (verb !== 'on' && verb !== 'off') {
             return {
               kind: 'error',
-              text: '用法：/tools、/tools off|on <工具名>、/tools guest [on|off]、/tools default [on|off]、/tools reset、/tools templates、/tools save|apply|delete <模板名>',
+              text: '用法：/tools、/tools off|on <工具名>、/tools guest [on|off]、/tools default [on|off]、/tools reset、/tools prune、/tools templates、/tools save|apply|delete <模板名>',
             };
           }
           if (name.length === 0) return { kind: 'error', text: `用法：/tools ${verb} <工具名>` };
@@ -857,7 +934,11 @@ export function apply(ctx, config = {}) {
     // Guest mode itself is a plugin preference, not a log record; infer it when every shell
     // and sub-agent tool is gone while the file tools stayed, which is its exact footprint.
     const shellish = GUEST_BLOCKED.filter((name) => view.restrictableNames.has(name) && eligible(name));
-    const guest = shellish.length > 0 && shellish.every((name) => missing.includes(name));
+    // Guest mode is inferred, so it is only inferred from its exact footprint: every shell tool
+    // gone and nothing else gone. Someone who switched the shell off by hand usually leaves a
+    // file tool off as well, and reading that as guest mode would lock their files to the
+    // workspace with no switch on screen to explain it.
+    const guest = shellish.length > 0 && missing.length === shellish.length && shellish.every((name) => missing.includes(name));
     store.setRecord(agent.id, { disabled: missing, guest });
     return true;
   }
